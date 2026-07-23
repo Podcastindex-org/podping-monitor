@@ -1,0 +1,112 @@
+use crate::swarm::{PeerRegistry, SuggestionLog};
+use crate::topology;
+use axum::extract::State;
+use axum::http::header;
+use axum::response::sse::{Event, Sse};
+use axum::response::{Html, IntoResponse, Json};
+use axum::routing::get;
+use axum::Router;
+use std::convert::Infallible;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::{broadcast, RwLock};
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub registry: Arc<PeerRegistry>,
+    pub sse_tx: broadcast::Sender<String>,
+    pub topology_analysis: Arc<RwLock<Option<topology::TopologyAnalysis>>>,
+    pub suggestion_log: Arc<SuggestionLog>,
+}
+
+/// Start the web server and return the broadcast sender for SSE pushes.
+pub fn start_web_server(
+    addr: SocketAddr,
+    registry: Arc<PeerRegistry>,
+    topology_analysis: Arc<RwLock<Option<topology::TopologyAnalysis>>>,
+    suggestion_log: Arc<SuggestionLog>,
+) -> broadcast::Sender<String> {
+    let (sse_tx, _) = broadcast::channel::<String>(256);
+
+    let state = AppState {
+        registry,
+        sse_tx: sse_tx.clone(),
+        topology_analysis,
+        suggestion_log,
+    };
+
+    let app = Router::new()
+        .route("/", get(index_handler))
+        .route("/js/monitor.js", get(js_handler))
+        .route("/css/style.css", get(css_handler))
+        .route("/api/swarm", get(swarm_handler))
+        .route("/api/topology", get(topology_handler))
+        .route("/api/events", get(events_handler))
+        .route("/api/version", get(version_handler))
+        .route("/api/suggestions", get(suggestions_handler))
+        .with_state(state);
+
+    tokio::spawn(async move {
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    sse_tx
+}
+
+async fn index_handler() -> Html<&'static str> {
+    Html(include_str!("static/index.html"))
+}
+
+async fn js_handler() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "no-cache, must-revalidate"),
+        ],
+        include_str!("static/monitor.js"),
+    )
+}
+
+async fn css_handler() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/css"),
+            (header::CACHE_CONTROL, "no-cache, must-revalidate"),
+        ],
+        include_str!("static/style.css"),
+    )
+}
+
+async fn swarm_handler(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.registry.snapshot())
+}
+
+async fn topology_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let guard = state.topology_analysis.read().await;
+    match &*guard {
+        Some(analysis) => Json(serde_json::json!(analysis)),
+        None => Json(serde_json::json!({})),
+    }
+}
+
+async fn version_handler() -> impl IntoResponse {
+    Json(serde_json::json!({"version": env!("CARGO_PKG_VERSION")}))
+}
+
+async fn suggestions_handler(State(state): State<AppState>) -> impl IntoResponse {
+    Json(serde_json::json!({"entries": state.suggestion_log.entries()}))
+}
+
+async fn events_handler(
+    State(state): State<AppState>,
+) -> Sse<impl tokio_stream::Stream<Item = Result<Event, Infallible>>> {
+    let rx = state.sse_tx.subscribe();
+    let stream = BroadcastStream::new(rx).filter_map(|result| match result {
+        Ok(data) => Some(Ok(Event::default().event("swarm").data(data))),
+        Err(_) => None,
+    });
+    Sse::new(stream)
+}
