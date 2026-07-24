@@ -52,6 +52,15 @@ const DEFAULT_NODE_KEY_FILE: &str = "gossip_monitor_node.key";
 const DEFAULT_KNOWN_PEERS_FILE: &str = "gossip_monitor_known_peers.txt";
 const MAX_KNOWN_PEERS: usize = 15;
 const DEFAULT_DHT_SECRET: &str = "podping_gossip_default_secret";
+// Stable podping.cloud writer nodes, used when BOOTSTRAP_PEER_IDS is unset.
+// Set BOOTSTRAP_PEER_IDS to override, or to an empty string for DHT-only join.
+const DEFAULT_BOOTSTRAP_PEER_IDS: &str = concat!(
+    "85db0701f52fddbe251734cff653aeed22e1b7f2dce4a190981afcb74df84b0e,",
+    "8fd0624d8373fa42bbebe9dca14dcb36c2973aa78bac542e595660d68a594c8b,",
+    "8f96a85f84a72dfea7a8730c165f797fe30427670560c05d43103b43deb30062,",
+    "6cbec939629fde22956ff9c24b77388c9130e0419f878ac2d11c6d32a159d4b3,",
+    "156a91eaa4266d0819c12c7ef80501d117932ebad9e069c1d77fe9012c77e52d"
+);
 const DEFAULT_WEB_BIND_ADDR: &str = "0.0.0.0:8090";
 const REBOOTSTRAP_TIMEOUT: u64 = 180;
 const REJOIN_INTERVAL_SECS: u64 = 1800;
@@ -103,7 +112,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| DEFAULT_WEB_BIND_ADDR.to_string())
         .parse()
         .expect("Invalid WEB_BIND_ADDR");
-    let bootstrap_peer_ids_str = env::var("BOOTSTRAP_PEER_IDS").unwrap_or_default();
+    let bootstrap_peer_ids_str = env::var("BOOTSTRAP_PEER_IDS")
+        .unwrap_or_else(|_| DEFAULT_BOOTSTRAP_PEER_IDS.to_string());
 
     // Load or create node key
     let node_key = load_or_create_node_key(&node_key_file)?;
