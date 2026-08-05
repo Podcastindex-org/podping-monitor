@@ -12,10 +12,11 @@ they arrive.
 ## What it does
 
 `gossip-monitor` joins the `gossipping/v1/all` gossip topic as an observer,
-discovers peers via DHT and a local bootstrap list, and serves a live web UI
-on port 8090 showing swarm topology, per-peer history cards, podping events,
-and a swarm-management log. It re-bootstraps from known peers when the swarm
-goes quiet and recycles its iroh endpoint periodically to bound memory.
+discovers peers via a compiled-in bootstrap list and a learned known-peers
+file, and serves a live web UI on port 8090 showing swarm topology, per-peer
+history cards, podping events, and a swarm-management log. It re-bootstraps
+from known peers when the swarm goes quiet and recycles its iroh endpoint
+periodically to bound memory.
 
 ## HTTP surface
 
@@ -48,14 +49,13 @@ cargo build --release --locked -p gossip-monitor
 ./target/release/gossip-monitor
 ```
 
-The workspace vendors `dtt/`, a fork of
-[distributed-topic-tracker](https://crates.io/crates/distributed-topic-tracker)
-0.2.8 (MIT, © Zacharias Boehler) with local modifications to peer management
-and memory behavior.
+## Peer discovery
 
-`Cargo.lock` pins pre-release transitive deps that ed25519-dalek 3.0.0-pre.1
-requires (`ed25519 3.0.0-rc.4`, `pkcs8 0.11.0-rc.11`). Always build
-`--locked`; do not re-resolve these.
+No DHT is used. Peer discovery is seed-based: 5 compiled-in podping.cloud
+writer node IDs (overridable via `BOOTSTRAP_PEER_IDS`), persisted to
+`KNOWN_PEERS_FILE` (capped at 15 entries) as new peers are seen, plus
+periodic `PeerSuggest` gossip messages that let the monitor recommend
+bootstrap peers to poorly-connected nodes in the swarm.
 
 ## Configuration
 
@@ -63,10 +63,9 @@ All configuration is via environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `BOOTSTRAP_PEER_IDS` | 5 podping.cloud writer nodes | Comma-separated iroh node IDs to join directly, alongside DHT discovery. Defaults to the stable podping.cloud writer nodes for fast joins; set your own list to override, or an empty string for DHT-only |
+| `BOOTSTRAP_PEER_IDS` | 5 podping.cloud writer nodes | Comma-separated iroh node IDs to join directly. Defaults to the stable podping.cloud writer nodes for fast joins; set your own list to override, or an empty string to rely solely on `KNOWN_PEERS_FILE` and inbound connections |
 | `IROH_NODE_KEY_FILE` | `gossip_monitor_node.key` | Iroh transport key (created if missing) |
-| `KNOWN_PEERS_FILE` | `gossip_monitor_known_peers.txt` | Learned-peer cache for DHT-less restarts (max 15) |
-| `DHT_INITIAL_SECRET` | `podping_gossip_default_secret` | Shared secret for DHT topic discovery |
+| `KNOWN_PEERS_FILE` | `gossip_monitor_known_peers.txt` | Learned-peer cache for fast restarts (max 15) |
 | `WEB_BIND_ADDR` | `0.0.0.0:8090` | Web UI listen address |
 
 ## Releases

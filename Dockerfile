@@ -9,7 +9,6 @@ RUN apt-get update \
 WORKDIR /src
 
 COPY Cargo.toml Cargo.lock /src/
-COPY dtt /src/dtt
 COPY gossip-monitor /src/gossip-monitor
 
 RUN cargo build --release --locked -p gossip-monitor
