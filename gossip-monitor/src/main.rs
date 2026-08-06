@@ -627,7 +627,7 @@ async fn main() -> anyhow::Result<()> {
                                 reconnect_neighbor_count.store(0, Ordering::Relaxed);
                                 last_reconnect = Instant::now();
                                 reconnect_counter.fetch_add(1, Ordering::Relaxed);
-                                println!("[RECONNECT] Gossip topic reconnected successfully (bootstrap-only mode).");
+                                println!("[RECONNECT] Gossip topic reconnected successfully.");
                             }
                         Ok(Err(e)) => {
                             eprintln!(
