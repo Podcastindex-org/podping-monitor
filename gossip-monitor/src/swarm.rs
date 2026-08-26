@@ -50,6 +50,8 @@ pub struct PeerAnnounce {
     #[serde(default)]
     pub os: Option<String>,
     #[serde(default)]
+    pub arch: Option<String>,
+    #[serde(default)]
     pub build_type: Option<String>,
     #[serde(default)]
     pub neighbors: Option<Vec<String>>,
@@ -132,6 +134,7 @@ pub struct PeerState {
     pub last_msg_age_secs: Option<u64>,
     pub reconnect_count: Option<u64>,
     pub os: Option<String>,
+    pub arch: Option<String>,
     pub build_type: Option<String>,
     pub neighbors: Vec<String>,
     #[serde(default)]
@@ -198,6 +201,7 @@ impl PeerRegistry {
             last_msg_age_secs: announce.last_msg_age_secs,
             reconnect_count: announce.reconnect_count,
             os: announce.os.clone(),
+            arch: announce.arch.clone(),
             build_type: announce.build_type.clone(),
             neighbors: announce.neighbors.clone().unwrap_or_default(),
             history: Vec::new(), // populated in snapshot()
@@ -303,5 +307,28 @@ impl PeerRegistry {
         }
 
         removed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn announce_arch_propagates_to_peer_state() {
+        let json = r#"{"type":"peer_announce","node_id":"n1","version":"0.14.0","timestamp":1,"arch":"aarch64"}"#;
+        let announce: PeerAnnounce = serde_json::from_str(json).unwrap();
+        let registry = PeerRegistry::new();
+        registry.update(&announce);
+        let snap = registry.snapshot();
+        assert_eq!(snap.peers[0].arch.as_deref(), Some("aarch64"));
+    }
+
+    #[test]
+    fn announce_json_without_arch_still_deserializes() {
+        // Announces from pre-arch nodes must keep parsing on a mixed-version mesh
+        let json = r#"{"type":"peer_announce","node_id":"n1","version":"0.12.0","timestamp":1}"#;
+        let announce: PeerAnnounce = serde_json::from_str(json).unwrap();
+        assert!(announce.arch.is_none());
     }
 }
