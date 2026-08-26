@@ -72,7 +72,7 @@ function renderTable(data) {
             + "<td>" + (p.msgs_sent != null ? p.msgs_sent : "-") + "</td>"
             + "<td>" + (p.last_msg_age_secs != null ? p.last_msg_age_secs + "s" : "-") + "</td>"
             + "<td>" + (p.reconnect_count != null ? p.reconnect_count : "-") + "</td>"
-            + "<td>" + esc(p.os) + "</td>"
+            + "<td>" + esc([p.os, p.arch].filter(Boolean).join("/") || "-") + "</td>"
             + "</tr>";
     }
     tbody.innerHTML = html;
@@ -145,6 +145,7 @@ function renderCards(data) {
         // Footer
         var osBuild = [];
         if (p.os) osBuild.push(p.os);
+        if (p.arch) osBuild.push(p.arch);
         if (p.build_type) osBuild.push(p.build_type);
         card.querySelector(".card-footer").innerHTML =
             "<span>" + esc(osBuild.join(" / ") || "-") + "</span>" +
