@@ -140,16 +140,19 @@ function renderCards(data) {
             "<span>Mem: <strong>" + (p.memory_mb != null ? p.memory_mb + " MB" : "-") + "</strong></span>" +
             "<span>Thr: <strong>" + (p.thread_count != null ? p.thread_count : "-") + "</strong></span>" +
             "<span>Nbr: <strong>" + (p.neighbor_count != null ? p.neighbor_count : "-") + "</strong></span>" +
-            "<span>Up: <strong>" + formatUptime(p.uptime_secs) + "</strong></span>";
+            "<span>Up: <strong>" + formatUptime(p.uptime_secs) + "</strong></span>" +
+            "<span>Paths: <strong>" + (p.neighbors_direct != null ? p.neighbors_direct + "d/" + (p.neighbors_relayed || 0) + "r" : "-") + "</strong></span>";
 
         // Footer
         var osBuild = [];
         if (p.os) osBuild.push(p.os);
         if (p.arch) osBuild.push(p.arch);
         if (p.build_type) osBuild.push(p.build_type);
+        if (p.iroh_version) osBuild.push("iroh " + p.iroh_version);
         card.querySelector(".card-footer").innerHTML =
             "<span>" + esc(osBuild.join(" / ") || "-") + "</span>" +
             "<span>Reconn: " + (p.reconnect_count != null ? p.reconnect_count : "-") + "</span>" +
+            "<span>WD: " + (p.watchdog_restarts != null ? p.watchdog_restarts : "-") + " / EP: " + (p.endpoint_resets != null ? p.endpoint_resets : "-") + "</span>" +
             "<span>Msg age: " + (p.last_msg_age_secs != null ? p.last_msg_age_secs + "s" : "-") + "</span>" +
             "<span>Rx: " + (p.msgs_received != null ? p.msgs_received : "-") +
             " Tx: " + (p.msgs_sent != null ? p.msgs_sent : "-") + "</span>";
