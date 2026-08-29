@@ -54,6 +54,16 @@ pub struct PeerAnnounce {
     #[serde(default)]
     pub build_type: Option<String>,
     #[serde(default)]
+    pub iroh_version: Option<String>,
+    #[serde(default)]
+    pub watchdog_restarts: Option<u64>,
+    #[serde(default)]
+    pub endpoint_resets: Option<u64>,
+    #[serde(default)]
+    pub neighbors_direct: Option<u32>,
+    #[serde(default)]
+    pub neighbors_relayed: Option<u32>,
+    #[serde(default)]
     pub neighbors: Option<Vec<String>>,
 }
 
@@ -136,6 +146,11 @@ pub struct PeerState {
     pub os: Option<String>,
     pub arch: Option<String>,
     pub build_type: Option<String>,
+    pub iroh_version: Option<String>,
+    pub watchdog_restarts: Option<u64>,
+    pub endpoint_resets: Option<u64>,
+    pub neighbors_direct: Option<u32>,
+    pub neighbors_relayed: Option<u32>,
     pub neighbors: Vec<String>,
     #[serde(default)]
     pub history: Vec<MetricSample>,
@@ -203,6 +218,11 @@ impl PeerRegistry {
             os: announce.os.clone(),
             arch: announce.arch.clone(),
             build_type: announce.build_type.clone(),
+            iroh_version: announce.iroh_version.clone(),
+            watchdog_restarts: announce.watchdog_restarts,
+            endpoint_resets: announce.endpoint_resets,
+            neighbors_direct: announce.neighbors_direct,
+            neighbors_relayed: announce.neighbors_relayed,
             neighbors: announce.neighbors.clone().unwrap_or_default(),
             history: Vec::new(), // populated in snapshot()
         };
@@ -322,6 +342,22 @@ mod tests {
         registry.update(&announce);
         let snap = registry.snapshot();
         assert_eq!(snap.peers[0].arch.as_deref(), Some("aarch64"));
+    }
+
+    #[test]
+    fn announce_diagnostics_propagate_to_peer_state() {
+        let json = r#"{"type":"peer_announce","node_id":"n1","version":"0.15.0","timestamp":1,
+            "iroh_version":"1.0.3","watchdog_restarts":2,"endpoint_resets":5,
+            "neighbors_direct":4,"neighbors_relayed":1}"#;
+        let announce: PeerAnnounce = serde_json::from_str(json).unwrap();
+        let registry = PeerRegistry::new();
+        registry.update(&announce);
+        let p = &registry.snapshot().peers[0];
+        assert_eq!(p.iroh_version.as_deref(), Some("1.0.3"));
+        assert_eq!(p.watchdog_restarts, Some(2));
+        assert_eq!(p.endpoint_resets, Some(5));
+        assert_eq!(p.neighbors_direct, Some(4));
+        assert_eq!(p.neighbors_relayed, Some(1));
     }
 
     #[test]

@@ -106,8 +106,23 @@ async fn main() -> anyhow::Result<()> {
     let bootstrap_peer_ids_str = env::var("BOOTSTRAP_PEER_IDS")
         .unwrap_or_else(|_| DEFAULT_BOOTSTRAP_PEER_IDS.to_string());
 
-    // Load or create node key
-    let node_key = load_or_create_node_key(&node_key_file)?;
+    // Load or create node key. GOSSIP_KEY_SEED derives the key deterministically
+    // instead, for hosts with no persistent storage (e.g. k8s pods).
+    let node_key = match env::var("GOSSIP_KEY_SEED").ok().filter(|s| !s.trim().is_empty()) {
+        Some(seed) => {
+            let disc = choose_discriminator(
+                env::var("GOSSIP_KEY_DISCRIMINATOR").ok(),
+                env::var("HOSTNAME").ok(),
+                fs::read_to_string("/proc/sys/kernel/hostname").ok(),
+            )
+            .ok_or_else(|| anyhow::anyhow!(
+                "GOSSIP_KEY_SEED is set but no discriminator found; set GOSSIP_KEY_DISCRIMINATOR (or HOSTNAME)"
+            ))?;
+            println!("  Deriving node key from GOSSIP_KEY_SEED (discriminator: {})", disc);
+            SecretKey::from_bytes(&derive_key_from_seed(&seed, &disc))
+        }
+        None => load_or_create_node_key(&node_key_file)?,
+    };
     let node_key_bytes = node_key.to_bytes();
 
     // Create iroh Endpoint
@@ -997,28 +1012,71 @@ async fn join_peers_timeout(
     }
 }
 
+/// LRU update of the known-peers list: a re-sighted peer moves to the end, a new
+/// peer appends (evicting from the front over `max`). Returns Some((list, is_new))
+/// when the file needs rewriting, None when nothing changed.
+fn update_known_peers_list(mut peers: Vec<String>, node_str: &str, max: usize) -> Option<(Vec<String>, bool)> {
+    match peers.iter().position(|p| p == node_str) {
+        Some(pos) if pos == peers.len() - 1 => None,
+        Some(pos) => {
+            let entry = peers.remove(pos);
+            peers.push(entry);
+            Some((peers, false))
+        }
+        None => {
+            peers.push(node_str.to_string());
+            if peers.len() > max {
+                let drain_count = peers.len() - max;
+                peers.drain(..drain_count);
+            }
+            Some((peers, true))
+        }
+    }
+}
+
+/// Deterministically derive an ed25519 node key from an operator-secret seed and
+/// a per-instance discriminator (domain-separated SHA-512, first 32 bytes).
+fn derive_key_from_seed(seed: &str, discriminator: &str) -> [u8; 32] {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha512::new();
+    hasher.update(b"podping-gossip-node-key-v1");
+    hasher.update([0u8]);
+    hasher.update(seed.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(discriminator.as_bytes());
+    hasher.finalize()[..32].try_into().unwrap()
+}
+
+/// Pick the key discriminator: explicit env override, then $HOSTNAME, then the
+/// kernel hostname; empty strings are treated as unset.
+fn choose_discriminator(
+    explicit: Option<String>,
+    hostname_env: Option<String>,
+    proc_hostname: Option<String>,
+) -> Option<String> {
+    [explicit, hostname_env, proc_hostname]
+        .into_iter()
+        .flatten()
+        .map(|s| s.trim().to_string())
+        .find(|s| !s.is_empty())
+}
+
 fn save_peer_if_new(path: &str, node_id: &str, my_node_id: &str) {
     if node_id == my_node_id {
         return;
     }
-    let mut peers: Vec<String> = fs::read_to_string(path)
+    let peers: Vec<String> = fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
         .collect();
 
-    if peers.iter().any(|l| l == node_id) {
+    // LRU: re-sighted peers move to the end so churn from ephemeral nodes
+    // can't evict stable peers from the front of the file.
+    let Some((peers, _is_new)) = update_known_peers_list(peers, node_id, MAX_KNOWN_PEERS) else {
         return;
-    }
-
-    peers.push(node_id.to_string());
-
-    // Evict oldest entries if over the cap
-    if peers.len() > MAX_KNOWN_PEERS {
-        let drain_count = peers.len() - MAX_KNOWN_PEERS;
-        peers.drain(..drain_count);
-    }
+    };
 
     if let Some(parent) = Path::new(path).parent() {
         if !parent.as_os_str().is_empty() {
@@ -1043,5 +1101,52 @@ mod tests {
         hasher.update(TOPIC_STRING.as_bytes());
         let hash: [u8; 32] = hasher.finalize()[..32].try_into().unwrap();
         assert_eq!(TOPIC_ID_BYTES, hash);
+    }
+
+    #[test]
+    fn known_peer_resighting_moves_it_to_end_of_list() {
+        let peers = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let (updated, is_new) = update_known_peers_list(peers, "a", 15).unwrap();
+        assert_eq!(updated, vec!["b", "c", "a"]);
+        assert!(!is_new);
+    }
+
+    #[test]
+    fn peer_already_at_end_needs_no_rewrite() {
+        let peers = vec!["a".to_string(), "b".to_string()];
+        assert!(update_known_peers_list(peers, "b", 15).is_none());
+    }
+
+    #[test]
+    fn new_peer_appends_and_evicts_oldest_over_cap() {
+        let peers = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let (updated, is_new) = update_known_peers_list(peers, "d", 3).unwrap();
+        assert_eq!(updated, vec!["b", "c", "d"]);
+        assert!(is_new);
+    }
+
+    #[test]
+    fn seed_key_derivation_matches_pinned_vector() {
+        // Pinned so all three daemons provably derive identical keys from the
+        // same seed+discriminator, and the format never drifts silently.
+        let hex = |b: [u8; 32]| b.iter().map(|x| format!("{:02x}", x)).collect::<String>();
+        assert_eq!(
+            hex(derive_key_from_seed("test-seed", "node-a")),
+            "e896ec2ff9ea153eced64c4d9234feee16086baf4facfb7a24877093ba6ea633"
+        );
+        assert_eq!(
+            hex(derive_key_from_seed("test-seed", "node-b")),
+            "ad94bac53fa79991ae8afa61177df611700736dfedcfc69576e21bda49c8ccb9"
+        );
+    }
+
+    #[test]
+    fn discriminator_prefers_explicit_then_hostname_and_ignores_empty() {
+        let s = |v: &str| Some(v.to_string());
+        assert_eq!(choose_discriminator(s("x"), s("h"), s("p")), s("x"));
+        assert_eq!(choose_discriminator(None, s("h"), s("p")), s("h"));
+        assert_eq!(choose_discriminator(None, None, s("p")), s("p"));
+        assert_eq!(choose_discriminator(s(""), s(""), s("p")), s("p"));
+        assert_eq!(choose_discriminator(None, None, None), None);
     }
 }
